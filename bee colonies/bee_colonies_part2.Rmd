@@ -1,0 +1,180 @@
+---
+title: Where Did All the Bees Go? (Part 2)
+author:
+- name: "Lisa Cao"
+  affiliation: "Aggregate Genius Inc."
+date: "2022-09-07"
+output: 
+    html_document:
+        theme: journal
+---
+
+## A Deep Dive into Bee Colony Loss with CanvasXpress and Plotly in R
+
+If you haven't seen our first article, "bee" sure to check it out. It goes over some of the basics of Plotly and CanvasXpress.
+
+Today we'll be making some more complex geospatial maps using the Bee Colony TidyTuesday dataset, including some animations. We will focus today on [Plotly](https://plotly.com/r/) and [CanvasXpress](https://canvasxpress.org/index.html) again. Map visualizations can vary a lot depending on which package you're using, so let's see how this goes!
+
+First, let's begin with loading our libraries. We will be once again needing the tidyverse for some data wrangling.
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(plotly)
+library(canvasXpress)
+```
+
+Next, let's pull in our data directly from the TidyTuesday Github.
+
+```{r, message=FALSE, warning=FALSE}
+# get data from tidytuesday's github 
+colony_data <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2022/2022-01-11/colony.csv')
+
+```
+
+In this dataset, we had plenty of state specific data that went underused in the first article. Spatial maps can be a little tricky because of the topology mapping, so we've added in the state codes to make it easier for Plotly and CanvasXpress to map the data to the topology. Note that this data is missing Nevada and Alaska, so they will appear blank in the charts.
+
+```{r, warning=FALSE}
+# add in state codes in new column
+colony_data <- colony_data %>%
+  mutate(codes = case_when(
+    state == 'Alabama'~'AL',       state == 'Alaska'~'AK',        state == 'Arizona'~'AZ',
+    state == 'Arkansas'~'AR',      state == 'California'~'CA',    state == 'Colorado'~'CO',        
+    state == 'Connecticut'~'CT',   state == 'Delaware'~'DE',    state == 'District of Columbia'~'DC',
+    state == 'Florida'~'FL',       state == 'Georgia'~'GA',       state == 'Hawaii'~'HI',        
+    state == 'Idaho'~'ID',         state == 'Illinois'~'IL',      state == 'Indiana'~'IN',
+    state == 'Iowa'~'IA',          state == 'Kansas'~'KS',        state == 'Kentucky'~'KY',      
+    state == 'Louisiana'~'LA',     state == 'Maine'~'ME',         state == 'Maryland'~'MD',
+    state == 'Massachusetts'~'MA', state == 'Michigan'~'MI',      state == 'Minnesota'~'MN',
+    state == 'Mississippi'~'MS',   state == 'Missouri'~'MO',      state == 'Montana'~'MT',
+    state == 'Nebraska'~'NE',      state == 'Nevada'~'NV',        state == 'New Hampshire'~'NH',
+    state == 'New Jersey'~'NJ',    state == 'New Mexico'~'NM',    state == 'New York'~'NY',        
+    state == 'North Carolina'~'NC',state == 'North Dakota'~'ND',  state == 'Ohio'~'OH',       
+    state == 'Oklahoma'~'OK',      state == 'Oregon'~'OR',        state == 'Pennsylvania'~'PA',
+    state == 'Rhode Island'~'RI',  state == 'South Carolina'~'SC',state == 'South Dakota'~'SD',
+    state == 'Tennessee'~'TN',     state == 'Texas'~'TX',         state == 'Utah'~'UT',
+    state == 'Vermont'~'VT',       state == 'Virginia'~'VA',      state == 'Washington'~'WA',
+    state == 'West Virginia'~'WV', state == 'Wisconsin'~'WI',     state == 'Wyoming'~'WY'))
+```
+
+To give us an idea of what the data looks like, let's take a look at the head.
+
+```{r, warning=FALSE}
+head(colony_data)
+```
+
+<br/>
+
+## Geospatial Map {.tabset .tabset-pills}
+
+### Plotly
+
+We first begin by building out our Plotly plot object and then use a layering approach. You can see here we assign some hovertext parameters in a new column before setting the base topology for our data to then be mapped onto. After that, we use the `plot_geo()` function to create the initial plot object and build upon it like we would any other Plotly plot. For the animation, we used the `frame` parameter. We then add some customized elements to our data, like setting the colorscale limits and titles.
+
+```{r, warning=FALSE}
+
+# set the hover text information
+colony_data$hovertext <- with(colony_data, paste(state, '<br>',
+                                   "Colony Percent Lost", colony_lost_pct,
+                                   '<br>',
+                                   "Total Colonies Lost", colony_lost))
+
+# create topology map
+g <- list(scope = 'usa',
+          projection = list(type = 'albers usa'))
+
+# create plot object and set the location for the state codes to work
+fig <- plot_geo(colony_data,
+                locationmode = 'USA-states',
+                frame = ~year)
+
+# map our data
+fig <- fig %>%
+    add_trace(z = ~colony_lost_pct,
+              text = ~hovertext,
+              locations = ~codes,
+              color = ~colony_lost_pct)
+
+# edit the legend 
+fig <- fig %>% colorbar(title = "Total % Lost",
+                        tickprefix = '%',
+                        limits = c(0, 100))
+
+# add our title and set the layout
+fig %>% layout(
+    title = list(text = "Total Percentage of Bee Colonies Lost Between 2015 - 2021"),
+    geo = g
+)
+```
+
+### CanvasXpress
+
+Let's build a similar chart in CanvasXpress. The data will take a bit more modelling here than with Plotly, so we've gone ahead and done some summarising to make the data more straightforward.
+
+```{r, message=FALSE, warning=FALSE}
+# prepare the data
+cx_colony_data <- colony_data %>%
+    group_by(year, state, codes) %>% 
+    summarise(annual_pct = mean(colony_lost_pct, na.rm = TRUE)) %>%
+    rename(State = state) %>% 
+    as.data.frame()
+
+# look at the data before splitting and transposing
+head(cx_colony_data)
+```
+
+```{r}
+# split and transpose data 
+y <- t(as.data.frame(cx_colony_data[, "annual_pct", drop = F]))
+y <- t(y)
+x <- t(cx_colony_data[, c(-4)])
+rownames(x) = c("year", "State", "code")
+
+# view the final data that will be used by CanvasXpress
+head(y)
+x[,1:5]
+```
+
+It's important to note how the column names will be mapped to the rownames later on by CanvasXpress.
+
+The data wrangling in this one took a lot more steps than we would usually do for a CanvasXpress plot, but once we got the final dataframes together it was pretty straightforward. Let's build our plot object now using the `canvasXpress()` function. We can add animation in CanvasXpress by using the `motionBy` parameter. Although the function itself was very straightforward, finding the right parameter names was a little tricky.
+
+```{r}
+canvasXpress(data = y,
+             varAnnot = x,
+             motionBy = "year",
+             colorBy = "annual_pct",
+             graphType = 'Map',
+             mapProjection = "albers",
+             mapPropertyId ="code",
+             legendPosition = "left",
+             showLegendTitle = FALSE,
+             setMinX = 0,
+             setMaxX = 100,
+             title = "Total Percentage of Bee Colonies Lost Between 2015 - 2021",
+             topoJSON="https://www.canvasxpress.org/data/usa-albers-states.json")
+```
+
+<br/>
+
+## Let's take a look at the breakdown between both visualization libraries.
+
+Overall, the frameworks for Plotly and CanvasXpress were very different in their approaches to creating these plots. Like before, I found CanvasXpress to be more straightforward but required some heavy lifting with the data wrangling beforehand. Plotly was a bit more forgiving when it came to the underlying data, but had a lot more moving parts in the plotting code. Both created fantastic visualizations though, so it really is up to personal preference.
+
+
++--------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+| #### [**Plotly R**](https://plotly.com/r/)                                                                                                       | #### [**CanvasXpress**](https://canvasxpress.org/index.html)                                                                                |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Requires some additional data preparation depending on the chart type                                                                        | -   Requires data pivoting to a wider format and setting of rownames                                                                        |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   More manual control over data arguments, such as manually setting x and y                                                                    | -   Easier to work with dataframes than tibbles and nested data formats (prefers flat data)                                                 |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Uses a lot of relative column and variable names                                                                                             | -   Assumes x and y values based on data argument, and doesn't handle ambiguity well                                                        |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Has a layered, modular approach that can be flexible but also bloated. Documentation is robust since it has a large community surrounding it | -   All plotting arguments are set in one function, but understanding which arguments are available for each chart type can be hard to find |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Has various interactive features and download functionalities                                                                                | -   Has various interactive features and download functionalities                                                                           |
+|                                                                                                                                                  |                                                                                                                                             |
+|                                                                                                                                                  | -   Comes with a plot editor (accessed through right-click) that can be very handy for users                                                |
++--------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+
+_Interested in the code used in this article?_ Check out the raw versions [here](https://github.com/Aggregate-Genius/canvasXpress-articles) on Github.

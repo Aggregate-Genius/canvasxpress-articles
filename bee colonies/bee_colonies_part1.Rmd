@@ -1,0 +1,216 @@
+---
+title: Where Did All the Bees Go? (Part 1)
+author: 
+- name: "Lisa Cao"
+  affiliation: "Aggregate Genius Inc."
+date: "2022-09-07"
+output: 
+    html_document:
+        theme: journal
+---
+
+## A Deep Dive into Bee Colony Loss with CanvasXpress and Plotly in R {.tabset .tabset-pills}
+
+Today we'll be looking at creating some data visualizations in both [Plotly](https://plotly.com/r/) and the Javascript-based visualization library [CanvasXpress](https://canvasxpress.org/index.html). Both are robust libraries with lots of similar features, so it'll be fun to see what it's like to try and recreate certain plots in both.
+
+First, let's load the appropriate libraries. We'll need the Tidyverse for some data wrangling.
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(plotly)
+library(canvasXpress)
+```
+
+Our dataset today was obtained from the USDA's 2022 release of the annual Honey Bee Colonies report (<https://usda.library.cornell.edu/concern/publications/rn301137d?locale=en>). We can grab some of the cleaned data from the TidyTuesday Github Repository.
+
+```{r, message=FALSE, warning=FALSE}
+# get data from tidytuesday's github 
+colony_data <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2022/2022-01-11/colony.csv')
+
+stressor_data <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2022/2022-01-11/stressor.csv')
+
+```
+
+<br/>
+
+### Scatterplots
+
+Let's start off with a basic visualization of which states have the most bee colonies and how many they've lost in total since 2015. We'll be using scatterplots to visualize this data to get a sense of how the different libraries handle basic visualization.
+
+```{r, message=FALSE, warning=FALSE}
+# prepare data 
+colony_data_grouped <- colony_data %>%
+    mutate(state = as.factor(state)) %>%
+    select(c("state", "colony_max", "colony_lost", "colony_n")) %>%
+    group_by(state) %>%
+    na.omit() %>%
+    summarize_all(sum)
+
+# take a look at the data
+head(colony_data_grouped)
+```
+
+All Plotly plots first begin with initializing a Plotly object using `plot_ly()`. After this is done you then build upon the Plotly object with your plot elements. We have added in an additional fit line so we can better visualize the trend. In Plotly we do this by creating a linear model and then plot it using `add_lines()`. We then add our aesthetic configurations at the end with `layout()`.
+
+```{r}
+# build initial Plotly plot
+fig <- plot_ly(colony_data_grouped,
+               x = ~colony_lost,
+               y = ~colony_n,
+               type = 'scatter',
+               mode = 'markers')
+
+# add linear regression model  
+fit <- lm(colony_n ~ colony_lost, data = colony_data_grouped)
+
+fig <- fig %>% add_lines(x = ~colony_lost, y = fitted(fit))
+
+# add layout arguments and aesthetics
+fig %>% layout(yaxis = list(title = "Number of Bee Colonies"),
+               xaxis = list(title = "Number of Colonies Lost"),
+               title = list(text = "Total Number of Bee Colonies by State Since 2015"),
+               showlegend = FALSE)
+```
+
+Now, let's try recreating something similar in CanvasXpress.
+
+CanvasXpress was built initially with biological data in mind, so it tends to work better with wide data formats. An example of this is having samples as columns, and variables as rows. CanvasXpress uses rownames to match up the data, so reshaping the data to emphasize row and column names are important. If you would like to learn more about wide datasets, you can check out [this](https://www.statology.org/long-vs-wide-data/) article.
+
+```{r, message=FALSE, warning=FALSE}
+# group data 
+colony_data_grouped <- colony_data %>%
+    mutate(state = as.factor(state)) %>%
+    select(c("state", "colony_max", "colony_lost", "colony_n")) %>%
+    group_by(state) %>%
+    na.omit() %>%
+    summarize_all(sum)
+
+# reshaping the data so that states are rownames
+cx_colony_data_grouped <- colony_data_grouped %>%
+    select(c(colony_n, colony_lost, state)) %>%
+    column_to_rownames("state")
+
+# take a look at the data
+head(cx_colony_data_grouped)
+```
+
+Unlike Plotly, CanvasXpress plots can all be configured using the `canvasXpress()` function to build our plot object. CanvasXpress can take `yAxis` and `xAxis` arguments, but I personally found it easier to model the data and then feed it in. CanvasXpress has a very useful function to add a regression line to the plot without the need for a pre-existing model. This is because of the extensive data modelling we did earlier, which makes it easier for CanvasXpress to make assumptions about our data.
+
+```{r}
+canvasXpress(data = cx_colony_data_grouped,
+             graphtype = "Scatter2D",
+             afterRender = list(list("addRegressionLine")),
+             title =  "Total Number of Bee Colonies by State Since 2015",
+             yAxisTitle = list("Number of Bee Colonies"),
+             xAxisTitle = list("Number of Colonies Lost"))
+```
+
+We can see that although CanvasXpress requires a bit more mindfulness with regards to data wrangling, we don't have to go through the layering approach that Plotly typically requires.
+
+
+### Stacked Bar Chart
+
+Let's try to create a stacked bar chart. For this one, let's take a look at the stressors involved in bee colony losses and their percent contributions. For the Plotly visualization we needed to do some wrangling of the data to used summarised values.
+
+```{r, message=FALSE, warning=FALSE}
+# prepare the data 
+stressor_data_filtered <- stressor_data %>%
+    mutate(stressor = as.factor(stressor_data$stressor)) %>%
+    group_by(stressor, state, year) %>%
+    summarise(pct_avg = mean(stress_pct, na.rm = TRUE)) %>% # quarterly average
+    group_by(stressor, year) %>%
+    summarise(pct_avg = mean(pct_avg, na.rm = TRUE)) %>% # average across states
+    pivot_wider(names_from = "stressor", values_from = "pct_avg") %>%
+    rename('Diseases' = 'Disesases')
+
+# take a look at the data
+head(stressor_data_filtered)
+```
+
+Next, in we will build our plotting object and add the traces for the individual factors manually. The layering here can be useful for controlling the order of the stacks. I personally found it a little cumbersome to repeat these traces, but I'm sure you could use an `lapply()` or for loop to make this easier on yourself.
+
+```{r}
+fig <- plot_ly(stressor_data_filtered,
+               x = ~year,
+               y = ~`Varroa mites`,
+               type = "bar",
+               name = "Varroa mites")
+
+# add stacked bars through traces
+fig <- fig %>% add_trace(y = ~`Other pests/parasites`,
+                         name = "Other pests/parasites")
+fig <- fig %>% add_trace(y = ~Pesticides,
+                         name = "Pesticides")
+fig <- fig %>% add_trace(y = ~`Diseases`,
+                         name = "Diseases")
+fig <- fig %>% add_trace(y = ~Other,
+                         name = "Other")
+fig <- fig %>% add_trace(y = ~Unknown,
+                         name = "Unknown")
+fig %>% layout(yaxis = list(title = "Average Stress PCT %"),
+               barmode = 'stack')
+
+```
+
+Now, for the CanvasXpress version! In addition to the data wrangling that was included for the Plotly visualization, you can see that we have also had to pivot the data to be in wide format.
+
+```{r, message=FALSE, warning=FALSE}
+# prepare the data 
+stressor_data_filtered <- stressor_data %>%
+    mutate(stressor = as.factor(stressor_data$stressor)) %>%
+    group_by(stressor, state, year) %>%
+    summarise(pct_avg = mean(stress_pct, na.rm = TRUE)) %>% # quarterly average
+    group_by(stressor, year) %>%
+    summarise(pct_avg = mean(pct_avg, na.rm = TRUE)) %>% # average across states
+    pivot_wider(names_from = "stressor", values_from = "pct_avg") %>%
+    rename('Diseases' = 'Disesases')
+
+# setting rownames to stressors and columns to year
+cx_stressor_data_filtered <- stressor_data_filtered %>%
+    pivot_longer(Diseases:`Varroa mites`) %>% 
+    pivot_wider(names_from = year) %>% 
+    column_to_rownames('name')
+
+# take a look at the data
+head(cx_stressor_data_filtered)
+```
+
+Looking at the data, we can see the format looks much cleaner and simplified compared to what we were able to give Plotly. As a result our actual plotting code below is fairly straightforward.
+
+```{r}
+canvasXpress(data = cx_stressor_data_filtered, 
+             graphType = "Stacked",
+             graphOrientation = "vertical",
+             title = "Stressor Contributors to Colony Loss",
+             xAxisTitle = "Average Stress PCT %")
+```
+
+Our stacked bar charts here are pretty comparable and look solid. The approach towards the same type of chart here was very different depending on which package you were using.
+
+<br/>
+
+## Let's take a look at the breakdown between both visualization libraries.
+
+Overall, both libraries did a fantastic job at creating the visualizations we wanted. One thing that did surprise me was how different the Plotly code looked depending on what type of chart I was making. In contrast, although CanvasXpress was more particular with it's data formatting, the actual plotting functions themselves looked very consistent.
+
+<br/>
+
++--------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+| #### [**Plotly R**](https://plotly.com/r/)                                                                                                       | #### [**CanvasXpress**](https://canvasxpress.org/index.html)                                                                                |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Requires some additional data preparation depending on the chart type                                                                        | -   Requires data pivoting to a wider format and setting of rownames                                                                        |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   More manual control over data arguments, such as manually setting x and y                                                                    | -   Easier to work with dataframes than tibbles and nested data formats (prefers flat data)                                                 |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Uses a lot of relative column and variable names                                                                                             | -   Assumes x and y values based on data argument, and doesn't handle ambiguity well                                                        |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Has a layered, modular approach that can be flexible but also bloated. Documentation is robust since it has a large community surrounding it | -   All plotting arguments are set in one function, but understanding which arguments are available for each chart type can be hard to find |
+|                                                                                                                                                  |                                                                                                                                             |
+| -   Has various interactive features and download functionalities                                                                                | -   Has various interactive features and download functionalities                                                                           |
+|                                                                                                                                                  |                                                                                                                                             |
+|                                                                                                                                                  | -   Comes with a plot editor (accessed through right-click) that can be very handy for users                                                |
++--------------------------------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+
+Stick around for part two of this article, where we do a deeper dive into more complex plots!
+
+_Interested in the code used in this article?_ Check out the raw versions [here](https://github.com/Aggregate-Genius/canvasXpress-articles) on Github.
